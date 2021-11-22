@@ -150,6 +150,7 @@ JavascriptEnvironment::JavascriptEnvironment(uv_loop_t* event_loop)
                       isolate_),
       locker_(isolate_) {
   isolate_->Enter();
+  isolate_->SetEmbedderHeapTracer(&multi_heap_tracer_);
   v8::HandleScope scope(isolate_);
   auto context = node::NewContext(isolate_);
   context_ = v8::Global<v8::Context>(isolate_, context);

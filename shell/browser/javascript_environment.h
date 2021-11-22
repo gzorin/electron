@@ -9,6 +9,7 @@
 
 #include "base/macros.h"
 #include "gin/public/isolate_holder.h"
+#include "gin/public/multi_heap_tracer.h"
 #include "uv.h"  // NOLINT(build/include_directory)
 
 namespace node {
@@ -43,6 +44,7 @@ class JavascriptEnvironment {
 
   v8::Isolate* isolate_;
   gin::IsolateHolder isolate_holder_;
+  gin::MultiHeapTracer multi_heap_tracer_;
   v8::Locker locker_;
   v8::Global<v8::Context> context_;
 
