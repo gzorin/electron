@@ -34,6 +34,7 @@
 #include "shell/common/mac/main_application_bundle.h"
 #include "shell/common/node_includes.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_initializer.h"  // nogncheck
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 
 #if !defined(MAS_BUILD)
 #include "shell/common/crash_keys.h"
@@ -654,3 +655,27 @@ void NodeBindings::EmbedThreadRunner(void* arg) {
 }
 
 }  // namespace electron
+
+namespace node {
+
+NODE_EXTERN int AddV8HeapTracer(v8::EmbedderHeapTracer* tracer) {
+  LOG(ERROR) << "AddV8HeapTracer: "
+             << (int)gin_helper::Locker::IsBrowserProcess();
+
+  if (gin_helper::Locker::IsBrowserProcess()) {
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    isolate->SetEmbedderHeapTracer(tracer);
+    return 0;
+  }
+
+  gin::MultiHeapTracer* multi_heap_tracer =
+      blink::ThreadState::Current()->GetMultiHeapTracer();
+  multi_heap_tracer->SetIsolate(tracer);
+  return multi_heap_tracer->AddHeapTracer(tracer);
+}
+
+NODE_EXTERN void RemoveV8Hepatracer(int) {
+  LOG(ERROR) << "RemoveV8HeapTracer";
+}
+
+}  // namespace node
