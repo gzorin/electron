@@ -9,6 +9,8 @@
 
 #include "gin/public/isolate_holder.h"
 #include "uv.h"  // NOLINT(build/include_directory)
+
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8-locker.h"
 
 namespace node {
@@ -51,6 +53,8 @@ class JavascriptEnvironment {
   v8::Global<v8::Context> context_;
 
   std::unique_ptr<MicrotasksRunner> microtasks_runner_;
+
+  std::unique_ptr<v8::CppHeap> cpp_heap_;
 };
 
 // Manage the Node Environment automatically.
