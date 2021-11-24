@@ -22,6 +22,7 @@
 #include "shell/common/gin_helper/cleaned_up_at_exit.h"
 #include "shell/common/node_includes.h"
 #include "tracing/trace_event.h"
+#include "v8/include/v8-cppgc.h"
 
 namespace {
 v8::Isolate* g_isolate;
@@ -149,6 +150,12 @@ JavascriptEnvironment::JavascriptEnvironment(uv_loop_t* event_loop)
                       gin::IsolateHolder::IsolateCreationMode::kNormal,
                       isolate_),
       locker_(isolate_) {
+  cppgc::InitializeProcess(platform_->GetPageAllocator());
+
+  cpp_heap_ =
+      v8::CppHeap::Create(platform_, {{}, v8::WrapperDescriptor(0, 1, 10)});
+  isolate_->AttachCppHeap(cpp_heap_.get());
+
   isolate_->Enter();
   v8::HandleScope scope(isolate_);
   auto context = node::NewContext(isolate_);
