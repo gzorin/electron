@@ -521,6 +521,9 @@ void WebContentsPreferences::OverrideWebkitPrefs(
   prefs->enable_websql = enable_websql_;
 
   prefs->v8_cache_options = v8_cache_options_;
+
+  // This is a browser side navigation if we are overriding prefs in browser.
+  prefs->browser_side_navigation = true;
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(WebContentsPreferences);

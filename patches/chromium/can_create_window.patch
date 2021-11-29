@@ -150,7 +150,7 @@ index 177bc1230a1aebd367dca42e92b63fb8be482805..f82d5c524ebf331c37280f0a93a5d3dc
    // typically happens when popups are created.
    virtual void WebContentsCreated(WebContents* source_contents,
 diff --git a/content/renderer/render_view_impl.cc b/content/renderer/render_view_impl.cc
-index 9eb0bc6d5460f640dc95cc170c9808b8e3f5fb16..190b517cea51bd3eae29695ba45efb22c4c82877 100644
+index 9eb0bc6d5460f640dc95cc170c9808b8e3f5fb16..d2c7f6f90a9ca5b70ce891af3af5232a9f49e8d1 100644
 --- a/content/renderer/render_view_impl.cc
 +++ b/content/renderer/render_view_impl.cc
 @@ -31,6 +31,7 @@
@@ -172,6 +172,17 @@ index 9eb0bc6d5460f640dc95cc170c9808b8e3f5fb16..190b517cea51bd3eae29695ba45efb22
    params->download_policy.ApplyDownloadFramePolicy(
        /*is_opener_navigation=*/false, request.HasUserGesture(),
        // `openee_can_access_opener_origin` only matters for opener navigations,
+@@ -352,6 +357,10 @@ WebView* RenderViewImpl::CreateView(
+   view_params->web_preferences = webview_->GetWebPreferences();
+   view_params->view_id = reply->route_id;
+ 
++  // Hint that this is a renderer side navigation, Electron will override this
++  // when doing a browser side navigation later.
++  view_params->web_preferences.browser_side_navigation = false;
++
+   view_params->replication_state = blink::mojom::FrameReplicationState::New();
+   view_params->replication_state->frame_policy.sandbox_flags = sandbox_flags;
+   view_params->replication_state->name = frame_name_utf8;
 diff --git a/content/web_test/browser/web_test_content_browser_client.cc b/content/web_test/browser/web_test_content_browser_client.cc
 index 99d4577526d64e4a73591be4b5bb4d67826abb1a..213db9dc65d10d70b6e02ee3b9b95d38bd951ba3 100644
 --- a/content/web_test/browser/web_test_content_browser_client.cc

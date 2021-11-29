@@ -58,12 +58,54 @@ ElectronRenderFrameObserver::ElectronRenderFrameObserver(
 }
 
 void ElectronRenderFrameObserver::DidClearWindowObject() {
+  // Do a delayed Node.js initialization for child window.
+  // Check DidInstallConditionalFeatures below for the background.
+  auto* web_frame = render_frame_->GetWebFrame();
+  if (has_delayed_node_initialization_ && web_frame->Opener() &&
+      render_frame_->GetBlinkPreferences().browser_side_navigation) {
+    v8::Isolate* isolate = blink::MainThreadIsolate();
+    v8::HandleScope handle_scope(isolate);
+    v8::MicrotasksScope microtasks_scope(
+        isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
+    v8::Handle<v8::Context> context = web_frame->MainWorldScriptContext();
+    v8::Context::Scope context_scope(context);
+    // DidClearWindowObject only emits for the main world.
+    DidInstallConditionalFeatures(context, MAIN_WORLD_ID);
+  }
+
   renderer_client_->DidClearWindowObject(render_frame_);
 }
 
 void ElectronRenderFrameObserver::DidInstallConditionalFeatures(
     v8::Handle<v8::Context> context,
     int world_id) {
+  // When a child window is created with window.open, its WebPreferences will
+  // be copied from its parent, and Chromium will intialize JS context in it
+  // immediately.
+  // Normally the WebPreferences is overriden in browser before navigation,
+  // but this behavior bypasses the browser side navigation and the child
+  // window will get wrong WebPreferences in the initialization.
+  // This will end up initializing Node.js in the child window with wrong
+  // WebPreferences, leads to problem that child window having node integration
+  // while "nodeIntegration=no" is passed.
+  // We work around this issue by delaying the child window's initialization of
+  // Node.js if this is a renderer side navigation, and only do it when the
+  // acutal page has started to load.
+  auto prefs = render_frame_->GetBlinkPreferences();
+  auto* web_frame = render_frame_->GetWebFrame();
+  if (web_frame->Opener() && !prefs.browser_side_navigation) {
+    // FIXME(zcbenz): Chromium does not do any browser side navigation for
+    // window.open('about:blank'), so there is no way to override WebPreferences
+    // of it. We should not delay Node.js initialization as there will be no
+    // further loadings.
+    GURL url = render_frame_->GetWebFrame()->GetDocument().Url();
+    if (!url.IsAboutBlank()) {
+      has_delayed_node_initialization_ = true;
+      return;
+    }
+  }
+  has_delayed_node_initialization_ = false;
+
   auto* isolate = context->GetIsolate();
   v8::MicrotasksScope microtasks_scope(
       isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
@@ -71,7 +113,6 @@ void ElectronRenderFrameObserver::DidInstallConditionalFeatures(
   if (ShouldNotifyClient(world_id))
     renderer_client_->DidCreateScriptContext(context, render_frame_);
 
-  auto prefs = render_frame_->GetBlinkPreferences();
   bool use_context_isolation = prefs.context_isolation;
   // This logic matches the EXPLAINED logic in electron_renderer_client.cc
   // to avoid explaining it twice go check that implementation in
