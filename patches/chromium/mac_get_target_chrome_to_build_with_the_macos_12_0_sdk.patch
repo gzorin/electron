@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nico Weber <thakis@chromium.org>
+Date: Mon, 1 Nov 2021 15:40:52 +0000
+Subject: mac: Get target "chrome" to build with the macOS 12.0 SDK
+
+No behavior change.
+
+AX-Relnotes: n/a.
+Bug: 1265179
+Change-Id: I8b329f1d1eaccf555c9fa77b30f0544d3dc43c6c
+Reviewed-on: https://chromium-review.googlesource.com/c/chromium/src/+/3252033
+Auto-Submit: Nico Weber <thakis@chromium.org>
+Commit-Queue: Abigail Klein <abigailbklein@google.com>
+Reviewed-by: Abigail Klein <abigailbklein@google.com>
+Cr-Commit-Position: refs/heads/main@{#936898}
+
+diff --git a/content/browser/accessibility/accessibility_tree_formatter_utils_mac.mm b/content/browser/accessibility/accessibility_tree_formatter_utils_mac.mm
+index 007b2b8337b90d549c96d32d8a72629a72ae9337..2d1611e131125331557ec4fa8ae6d952ce9adc38 100644
+--- a/content/browser/accessibility/accessibility_tree_formatter_utils_mac.mm
++++ b/content/browser/accessibility/accessibility_tree_formatter_utils_mac.mm
+@@ -10,12 +10,15 @@
+ 
+ using ui::AXPropertyNode;
+ 
++#if !defined(MAC_OS_VERSION_12_0) || \
++    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_VERSION_12_0
++using AXTextMarkerRangeRef = CFTypeRef;
++using AXTextMarkerRef = CFTypeRef;
+ extern "C" {
+-
+-CFTypeRef AXTextMarkerRangeCopyStartMarker(CFTypeRef);
+-
+-CFTypeRef AXTextMarkerRangeCopyEndMarker(CFTypeRef);
++AXTextMarkerRef AXTextMarkerRangeCopyStartMarker(AXTextMarkerRangeRef);
++AXTextMarkerRef AXTextMarkerRangeCopyEndMarker(AXTextMarkerRangeRef);
+ }  // extern "C"
++#endif
+ 
+ namespace content {
+ namespace a11y {
+@@ -218,12 +221,12 @@
+     const id target,
+     const AXPropertyNode& property_node) const {
+   if (property_node.name_or_value == "anchor")
+-    return OptionalNSObject(static_cast<id>(
+-        AXTextMarkerRangeCopyStartMarker(static_cast<CFTypeRef>(target))));
++    return OptionalNSObject(static_cast<id>(AXTextMarkerRangeCopyStartMarker(
++        static_cast<AXTextMarkerRangeRef>(target))));
+ 
+   if (property_node.name_or_value == "focus")
+-    return OptionalNSObject(static_cast<id>(
+-        AXTextMarkerRangeCopyEndMarker(static_cast<CFTypeRef>(target))));
++    return OptionalNSObject(static_cast<id>(AXTextMarkerRangeCopyEndMarker(
++        static_cast<AXTextMarkerRangeRef>(target))));
+ 
+   return OptionalNSObject::Error();
+ }
+diff --git a/content/browser/accessibility/browser_accessibility_cocoa.mm b/content/browser/accessibility/browser_accessibility_cocoa.mm
+index bf3244b706365b98233a34d387fd2a42a030e6a3..657734902bf287236feff30b03097218fce05d2a 100644
+--- a/content/browser/accessibility/browser_accessibility_cocoa.mm
++++ b/content/browser/accessibility/browser_accessibility_cocoa.mm
+@@ -40,8 +40,6 @@
+ 
+ #import "ui/accessibility/platform/ax_platform_node_mac.h"
+ 
+-using AXTextMarkerRangeRef = CFTypeRef;
+-using AXTextMarkerRef = CFTypeRef;
+ using StringAttribute = ax::mojom::StringAttribute;
+ using content::AccessibilityMatchPredicate;
+ using content::BrowserAccessibility;
+@@ -243,33 +241,29 @@
+ const int kAXResultsLimitNoLimit = -1;
+ 
+ #ifndef MAS_BUILD
+-extern "C" {
+-
+ // The following are private accessibility APIs required for cursor navigation
+ // and text selection. VoiceOver started relying on them in Mac OS X 10.11.
++// They are public as of the 12.0 SDK.
++#if !defined(MAC_OS_VERSION_12_0) || \
++    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_VERSION_12_0
++using AXTextMarkerRangeRef = CFTypeRef;
++using AXTextMarkerRef = CFTypeRef;
++extern "C" {
+ CFTypeID AXTextMarkerGetTypeID();
+-
+-AXTextMarkerRef AXTextMarkerCreate(CFAllocatorRef allocator,
++AXTextMarkerRef AXTextMarkerCreate(CFAllocatorRef,
+                                    const UInt8* bytes,
+                                    CFIndex length);
+-
+-const UInt8* AXTextMarkerGetBytePtr(AXTextMarkerRef text_marker);
+-
+-size_t AXTextMarkerGetLength(AXTextMarkerRef text_marker);
++size_t AXTextMarkerGetLength(AXTextMarkerRef);
++const UInt8* AXTextMarkerGetBytePtr(AXTextMarkerRef);
+ 
+ CFTypeID AXTextMarkerRangeGetTypeID();
+-
+-AXTextMarkerRangeRef AXTextMarkerRangeCreate(CFAllocatorRef allocator,
+-                                             AXTextMarkerRef start_marker,
+-                                             AXTextMarkerRef end_marker);
+-
+-AXTextMarkerRef AXTextMarkerRangeCopyStartMarker(
+-    AXTextMarkerRangeRef text_marker_range);
+-
+-AXTextMarkerRef AXTextMarkerRangeCopyEndMarker(
+-    AXTextMarkerRangeRef text_marker_range);
+-
++AXTextMarkerRangeRef AXTextMarkerRangeCreate(CFAllocatorRef,
++                                             AXTextMarkerRef start,
++                                             AXTextMarkerRef end);
++AXTextMarkerRef AXTextMarkerRangeCopyStartMarker(AXTextMarkerRangeRef);
++AXTextMarkerRef AXTextMarkerRangeCopyEndMarker(AXTextMarkerRangeRef);
+ }  // extern "C"
++#endif
+ 
+ // AXTextMarkerCreate is a system function that makes a copy of the data buffer
+ // given to it.
+@@ -794,7 +788,8 @@ bool IsSelectedStateRelevant(BrowserAccessibility* item) {
+ 
+ id content::AXTextMarkerRangeFrom(id anchor_textmarker, id focus_textmarker) {
+   AXTextMarkerRangeRef cf_marker_range = AXTextMarkerRangeCreate(
+-      kCFAllocatorDefault, anchor_textmarker, focus_textmarker);
++      kCFAllocatorDefault, static_cast<AXTextMarkerRef>(anchor_textmarker),
++      static_cast<AXTextMarkerRef>(focus_textmarker));
+   return [static_cast<id>(cf_marker_range) autorelease];
+ }
+ #endif

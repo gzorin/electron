@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Mon, 1 Nov 2021 12:02:14 -0400
+Subject: bbg: Multi-heap tracer: V8 changes
+
+V8 support for the gin multi-heap tracer
+
+diff --git a/include/v8.h b/include/v8.h
+index 28ee5e6b673ce8f34d26a322cc83abc959f25c97..525d7eac3aff6509de6fcb229fcc1f54c5f2e046 100644
+--- a/include/v8.h
++++ b/include/v8.h
+@@ -34,6 +34,14 @@
+ // We reserve the V8_* prefix for macros defined in V8 public API and
+ // assume there are no name conflicts with the embedder's code.
+ 
++/**
++ * Required so 'EmbedderHeapTracer' can friend 'gin::MultiHeapTracer'.  See the
++ * note in 'EmbedderHeapTracer' for more information.
++ */
++namespace gin {
++class MultiHeapTracer;
++}
++
+ /**
+  * The v8 JavaScript engine.
+  */
+@@ -8178,6 +8186,17 @@ class V8_EXPORT EmbedderHeapTracer {
+   v8::Isolate* isolate_ = nullptr;
+ 
+   friend class internal::LocalEmbedderHeapTracer;
++
++  /**
++   * NOTE:
++   *   LocalEmbedderHeapTracer, which is declared as a friend, is usually
++   *   responsible for setting 'isolate_' when 'Isolate::SetEmbedderHeapTracer'
++   *   is called.  However with the introduced 'gin::MultiHeapTracer', we only
++   *   set that on the 'Isolate'.  We need to be able to set up 'isolate_' for
++   *   every tracer that is added to the 'MultiHeapTracer'.  To achieve this,
++   *   we also friend 'MultiHeapTracer'.
++   */
++  friend class gin::MultiHeapTracer;
+ };
+ 
+ /**

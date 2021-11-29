@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Mon, 22 Nov 2021 10:22:04 -0500
+Subject: bbg: Multi-heap tracer: blink changes
+
+* Replace blink's heap tracer with a `gin::MultiHeapTracer`.
+
+* Suppress assertions related to the use of `v8::TraceGlobal`.
+
+diff --git a/third_party/blink/renderer/bindings/core/v8/v8_embedder_graph_builder.cc b/third_party/blink/renderer/bindings/core/v8/v8_embedder_graph_builder.cc
+index 2562829488b8960382cc2237b26b143fc59421b9..89281ca78119512885a08553ef5905f0644a2323 100644
+--- a/third_party/blink/renderer/bindings/core/v8/v8_embedder_graph_builder.cc
++++ b/third_party/blink/renderer/bindings/core/v8/v8_embedder_graph_builder.cc
+@@ -461,7 +461,7 @@ void V8EmbedderGraphBuilder::VisitTracedReference(
+ 
+ void V8EmbedderGraphBuilder::VisitTracedGlobalHandle(
+     const v8::TracedGlobal<v8::Value>&) {
+-  CHECK(false) << "Blink does not use v8::TracedGlobal.";
++  //CHECK(false) << "Blink does not use v8::TracedGlobal.";
+ }
+ 
+ void V8EmbedderGraphBuilder::VisitPersistentHandle(
+diff --git a/third_party/blink/renderer/platform/heap/impl/thread_state.cc b/third_party/blink/renderer/platform/heap/impl/thread_state.cc
+index 101dc3072e34a04edec366636265c3c96cba82a2..334bd0c8ad903e5b50146854e5bd77bcf9ac330b 100644
+--- a/third_party/blink/renderer/platform/heap/impl/thread_state.cc
++++ b/third_party/blink/renderer/platform/heap/impl/thread_state.cc
+@@ -260,8 +260,9 @@ class BlinkRootsHandler final : public v8::EmbedderRootsHandler {
+   }
+ 
+   bool IsRoot(const v8::TracedGlobal<v8::Value>& handle) final {
+-    CHECK(false) << "Blink does not use v8::TracedGlobal.";
+-    return false;
++    //CHECK(false) << "Blink does not use v8::TracedGlobal.";
++    //return false;
++    return true;
+   }
+ 
+   void ResetRoot(const v8::TracedReference<v8::Value>& handle) final {
+@@ -297,7 +298,9 @@ void ThreadState::AttachToIsolate(
+   isolate_ = isolate;
+   v8_build_embedder_graph_ = v8_build_embedder_graph;
+   unified_heap_controller_ = std::make_unique<UnifiedHeapController>(this);
+-  isolate_->SetEmbedderHeapTracer(unified_heap_controller_.get());
++  isolate_->SetEmbedderHeapTracer(&multi_heap_tracer_);
++  //isolate_->SetEmbedderHeapTracer(unified_heap_controller_.get());
++  multi_heap_tracer_id_ = multi_heap_tracer_.AddHeapTracer(unified_heap_controller_.get(), gin::kEmbedderBlink);
+   unified_heap_controller_.get()->SetStackStart(WTF::GetStackStart());
+   if (v8::HeapProfiler* profiler = isolate->GetHeapProfiler()) {
+     profiler->AddBuildEmbedderGraphCallback(v8_build_embedder_graph, nullptr);
+@@ -312,7 +315,10 @@ void ThreadState::DetachFromIsolate() {
+       BlinkGC::kAtomicMarking, BlinkGC::kEagerSweeping,
+       BlinkGC::GCReason::kThreadTerminationGC);
+   if (isolate_) {
++    multi_heap_tracer_.RemoveHeapTracer(multi_heap_tracer_id_);
+     isolate_->SetEmbedderHeapTracer(nullptr);
++    multi_heap_tracer_id_ = 0;
++
+     if (v8::HeapProfiler* profiler = isolate_->GetHeapProfiler()) {
+       profiler->RemoveBuildEmbedderGraphCallback(v8_build_embedder_graph_,
+                                                  nullptr);
+diff --git a/third_party/blink/renderer/platform/heap/impl/thread_state.h b/third_party/blink/renderer/platform/heap/impl/thread_state.h
+index 48448467330ac6c70e87f587b5ca6a224921199d..2227d54c97b87382001d752f2d3f64d106119c40 100644
+--- a/third_party/blink/renderer/platform/heap/impl/thread_state.h
++++ b/third_party/blink/renderer/platform/heap/impl/thread_state.h
+@@ -52,6 +52,7 @@
+ #include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
+ #include "third_party/blink/renderer/platform/wtf/vector.h"
+ #include "v8/include/v8.h"
++#include "gin/public/multi_heap_tracer.h"
+ 
+ namespace v8 {
+ class EmbedderGraph;
+@@ -315,6 +316,10 @@ class PLATFORM_EXPORT ThreadState final {
+     return in_atomic_pause() && IsSweepingInProgress();
+   }
+ 
++  gin::MultiHeapTracer* GetMultiHeapTracer() {
++    return &multi_heap_tracer_;
++  }
++
+   bool IsIncrementalMarking() const { return incremental_marking_; }
+   void SetIncrementalMarking(bool value) { incremental_marking_ = value; }
+ 
+@@ -649,6 +654,8 @@ class PLATFORM_EXPORT ThreadState final {
+   bool concurrent_marking_priority_increased_ = false;
+ 
+   bool no_followup_full_gc_for_testing_ = false;
++  gin::MultiHeapTracer multi_heap_tracer_;
++  int multi_heap_tracer_id_ = 0;
+ 
+   friend class incremental_marking_test::IncrementalMarkingScope;
+   friend class HeapPointersOnStackScope;
+diff --git a/third_party/blink/renderer/platform/heap/v8_wrapper/thread_state.cc b/third_party/blink/renderer/platform/heap/v8_wrapper/thread_state.cc
+index 303c2839488c1082471031fd03c4577269998d94..140731d6b38bd63bda5b145bb93d5fcbc5a5a6d6 100644
+--- a/third_party/blink/renderer/platform/heap/v8_wrapper/thread_state.cc
++++ b/third_party/blink/renderer/platform/heap/v8_wrapper/thread_state.cc
+@@ -49,8 +49,9 @@ class BlinkRootsHandler final : public v8::EmbedderRootsHandler {
+   }
+ 
+   bool IsRoot(const v8::TracedGlobal<v8::Value>& handle) final {
+-    CHECK(false) << "Blink does not use v8::TracedGlobal.";
+-    return false;
++    //CHECK(false) << "Blink does not use v8::TracedGlobal.";
++    //return false;
++    return true;
+   }
+ 
+   // ResetRoot() clears references to V8 wrapper objects in all worlds. It is

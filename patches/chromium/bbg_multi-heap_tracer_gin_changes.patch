@@ -1,0 +1,306 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Mon, 1 Nov 2021 12:02:52 -0400
+Subject: bbg: Multi-heap tracer: gin changes
+
+Introduce `gin::MultiHeapTracer`
+
+diff --git a/gin/BUILD.gn b/gin/BUILD.gn
+index c6059fdb0e0f74ee3ef78c5517634ed5a36f1b10..f70ab165f3779f7c1a555831c53756d2d77be74e 100644
+--- a/gin/BUILD.gn
++++ b/gin/BUILD.gn
+@@ -33,6 +33,7 @@ component("gin") {
+     "isolate_holder.cc",
+     "modules/console.cc",
+     "modules/console.h",
++    "multi_heap_tracer.cc",
+     "object_template_builder.cc",
+     "object_template_builder.h",
+     "per_context_data.cc",
+@@ -44,6 +45,7 @@ component("gin") {
+     "public/debug.h",
+     "public/gin_embedders.h",
+     "public/isolate_holder.h",
++    "public/multi_heap_tracer.h",
+     "public/v8_idle_task_runner.h",
+     "public/v8_platform.h",
+     "public/wrapper_info.h",
+diff --git a/gin/multi_heap_tracer.cc b/gin/multi_heap_tracer.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..323c44b3f65df88f1357682b8ac1d923c1e569fd
+--- /dev/null
++++ b/gin/multi_heap_tracer.cc
+@@ -0,0 +1,125 @@
++// Copyright 2018 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++ #include "gin/public/multi_heap_tracer.h"
++#include "gin/per_isolate_data.h"
++
++ #include <algorithm>
++
++ #include "base/logging.h"
++
++ namespace gin {
++
++ // CREATORS
++MultiHeapTracer::MultiHeapTracer()
++  : is_tracing_(false),
++    next_id_(gin::kEmbedderUnknown),
++    tracers_() {
++}
++
++ MultiHeapTracer::~MultiHeapTracer() {
++}
++
++ // MANIPULATORS
++int MultiHeapTracer::AddHeapTracer(v8::EmbedderHeapTracer *tracer,
++                                   GinEmbedder             embedder) {
++  DCHECK(!is_tracing_);
++  DCHECK(kEmbedderUnknown == embedder || 0 == tracers_.count(embedder));
++
++   tracer->isolate_ = isolate_;
++
++   int embedder_id = embedder;
++  if (kEmbedderUnknown == embedder) {
++    embedder_id = next_id_++;
++  }
++
++   tracers_[embedder_id] = tracer;
++
++   return embedder_id;
++}
++
++ void MultiHeapTracer::RemoveHeapTracer(int embedder_id) {
++  DCHECK(!is_tracing_);
++  DCHECK(1 == tracers_.count(embedder_id));
++
++   tracers_[embedder_id]->isolate_ = nullptr;
++
++   tracers_.erase(embedder_id);
++}
++
++ void MultiHeapTracer::SetIsolate(v8::EmbedderHeapTracer *tracer) {
++  tracer->isolate_ = isolate_;
++}
++
++ void MultiHeapTracer::RegisterV8References(
++                                const WrapperFieldPairs& wrapper_field_pairs) {
++  for (auto&& id_and_tracer : tracers_) {
++    id_and_tracer.second->RegisterV8References(wrapper_field_pairs);
++  }
++}
++
++ void MultiHeapTracer::TracePrologue(TraceFlags flags) {
++  is_tracing_ = true;
++
++   for (auto&& id_and_tracer : tracers_) {
++    id_and_tracer.second->TracePrologue(flags);
++  }
++}
++
++ bool MultiHeapTracer::AdvanceTracing(double deadline_in_ms) {
++  // To avoid starving any particular tracer, as it's conceivable that the
++  // deadline will be reached before calling 'AdvanceTracing' on all tracers,
++  // we visit them in a round robin fashion.
++
++   bool done = true;
++
++   for (auto&& id_and_tracer : tracers_) {
++    if (!id_and_tracer.second->AdvanceTracing(deadline_in_ms)) {
++      done = false;
++    }
++  }
++
++   return done;
++}
++
++ bool MultiHeapTracer::IsTracingDone() {
++  for (auto&& id_and_tracer : tracers_) {
++    if (!id_and_tracer.second->IsTracingDone()) {
++      return false;
++    }
++  }
++
++   return true;
++}
++
++ void MultiHeapTracer::TraceEpilogue(TraceSummary* trace_summary) {
++  is_tracing_ = false;
++
++   for (auto&& id_and_tracer : tracers_) {
++    TraceSummary child_summary;
++    id_and_tracer.second->TraceEpilogue(&child_summary);
++
++     trace_summary->time           += child_summary.time;
++    trace_summary->allocated_size += child_summary.allocated_size;
++  }
++}
++
++ void MultiHeapTracer::EnterFinalPause(EmbedderStackState stack_state) {
++  for (auto&& id_and_tracer : tracers_) {
++    id_and_tracer.second->EnterFinalPause(stack_state);
++  }
++}
++
++ bool MultiHeapTracer::IsRootForNonTracingGC(
++                                   const v8::TracedGlobal<v8::Value>& handle) {
++  for (auto&& id_and_tracer : tracers_) {
++    if (id_and_tracer.second->IsRootForNonTracingGC(handle)) {
++      return true;
++    }
++  }
++
++   return false;
++}
++
++ }  // namespace gin
+\ No newline at end of file
+diff --git a/gin/public/gin_embedders.h b/gin/public/gin_embedders.h
+index e88cc0a555b407601c3b41d142c913af0b734474..285c5f67bfa0df4d7d7d74db51a21e9057fbceba 100644
+--- a/gin/public/gin_embedders.h
++++ b/gin/public/gin_embedders.h
+@@ -20,6 +20,7 @@ enum GinEmbedder : uint16_t {
+   kEmbedderBlink,
+   kEmbedderPDFium,
+   kEmbedderFuchsia,
++  kEmbedderUnknown,
+ };
+ 
+ }  // namespace gin
+diff --git a/gin/public/multi_heap_tracer.h b/gin/public/multi_heap_tracer.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c092b4c0e7f3f85dc16cbdfa2b33df10642cf95
+--- /dev/null
++++ b/gin/public/multi_heap_tracer.h
+@@ -0,0 +1,128 @@
++// Copyright 2018 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++ #ifndef GIN_PUBLIC_MULTI_HEAP_TRACER_H_
++#define GIN_PUBLIC_MULTI_HEAP_TRACER_H_
++
++ #include <unordered_map>
++#include <utility>
++
++ #include "base/macros.h"
++#include "gin/public/gin_embedders.h"
++#include "gin/gin_export.h"
++#include "v8/include/v8.h"
++
++ namespace gin {
++
++ class GIN_EXPORT MultiHeapTracer : public v8::EmbedderHeapTracer {
++  // 'MultiHeapTracer' provides a concrete implementation of the
++  // 'v8::EmbedderHeapTracer' protocol, designed to support the tracing of
++  // multiple embedder heaps.
++  //
++  // When V8 informs tracers of wrappers that need to be traced, it gives the
++  // tracer the first two embedder fields for each wrapper.  To integrate with
++  // this MultiHeapTracer, embedders must set the first embedder field to an
++  // object which is layout-compatible with 'gin::WrapperInfo'.  The 'embedder'
++  // field for wrappers from a given embedder heap must be set to the id
++  // returned from the 'AddHeapTracer' call to add the tracer for that embedder
++  // heap.
++  //
++  // For known embedders, 'AddHeapTracer' allows the embedder to be specified,
++  // in which case the returned value will match the value passed in.  If the
++  // embedder is not specified (kEmbedderUnknown), this heap tracer will
++  // generate a unique id.
++  //
++  // For 'RegisterV8References', each registered heap tracer will be given all
++  // wrappers, but is expected to ignore wrappers with an embedder field which
++  // it does not recognize.
++  //
++  // For 'AdvanceTracing', each registered heap tracer will be asked to advance
++  // tracing.  Tracers are expected to ensure that they do nothing if the
++  // deadline has already passed.
++
++  public:
++  // TYPES
++  using WrapperFieldPair = std::pair<void *, void *>;
++    // Alias for the first and second embedder field values of a wrapper.
++
++   using WrapperFieldPairs = std::vector<WrapperFieldPair>;
++    // Alias for a collection of WrapperFieldPair objects.
++
++   // CREATORS
++  MultiHeapTracer();
++    // Create a new MultiHeapTracer.
++
++   ~MultiHeapTracer() final;
++    // Destroy this object.
++
++   // MANIPULATORS
++  int AddHeapTracer(v8::EmbedderHeapTracer *tracer,
++                    GinEmbedder             embedder = kEmbedderUnknown);
++    // Register the specified 'tracer' and return an id which must be set as
++    // the 'embedder' field of the 'WrapperInfo'-compatible struct.  Optionally
++    // specify the 'embedder' id to be returned.  If 'embedder' is
++    // 'kEmbedderUnknown', a new id will be generated.  The behavior is
++    // undefined unless heap tracing is not currently in progress.
++
++   void RemoveHeapTracer(int embedder_id);
++    // Unregister the tracer for the specified 'embedder_id'.  The behavior is
++    // undefined unless 'embedder_id' was obtained by a call to
++    // 'AddHeapTracer'.  The behavior is undefined unless heap tracing is not
++    // currently in progress.
++
++   void SetIsolate(v8::EmbedderHeapTracer *tracer);
++    // Set the 'isolate' member of the specified 'tracer' to the same as the
++    // 'isolate' member of this 'MultiHeapTracer'.  This is required if someone
++    // wants to have a standalone 'EmbedderHeapTracer' which can operate
++    // correctly.
++
++   void RegisterV8References(
++                        const WrapperFieldPairs& wrapper_field_pairs) override;
++    // Notify all registered tracers of the wrapper field pairs that may need
++    // tracing.  Each tracer is expected to inspect the 'embedder' field of the
++    // 'WrapperInfo'-compatible struct in the first field of each pair, and
++    // ignore wrapper field pairs which don't match.  Tracers are expected to
++    // store the field pairs they care about for later tracing when
++    // 'AdvanceTracing' is called.
++
++   void TracePrologue(TraceFlags flags) override;
++    // Notify all registered tracers that tracing will begin.
++
++   bool AdvanceTracing(double deadline_in_ms) override;
++    // Notify all registered tracers that they should trace the wrapper field
++    // pairs they previously stored from 'RegisterV8References'.  The
++    // registered tracers will be called in a different random order each time.
++    // Each tracer should ensure that once the specified 'deadline_in_ms' is
++    // past, it does no work.  If the 'deadline_in_ms' is 'Infinity', the
++    // tracers should complete tracing.
++
++   bool IsTracingDone() override;
++    // Return true if all of the registered tracers have completed, and false
++    // otherwise.
++
++   void TraceEpilogue(TraceSummary* trace_summary) override;
++    // Notify all registered tracers that tracing has completed.  Load into the
++    // specified 'trace_summary' the cumulative summary from all registered
++    // tracers.
++
++   void EnterFinalPause(EmbedderStackState stack_state) override;
++    // Notify all registered tracers that we're entering the final pause.
++
++   bool IsRootForNonTracingGC(const v8::TracedGlobal<v8::Value>& handle) override;
++    // Return true if any of the registered tracers report the specified
++    // 'handle' as being a root for non-tracing gc, and false otherwise.
++
++  private:
++  using Tracers = std::unordered_map<int, v8::EmbedderHeapTracer *>;
++
++   bool    is_tracing_;  // Whether we're currently tracing
++  int     next_id_;     // The next id for unknown embedders
++  Tracers tracers_;     // The collection of registered tracers
++
++   DISALLOW_COPY_AND_ASSIGN(MultiHeapTracer);
++};
++
++ }  // namespace gin
++
++ #endif  // GIN_PUBLIC_MULTI_HEAP_TRACER_H_
+\ No newline at end of file
