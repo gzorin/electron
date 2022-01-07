@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Fri, 7 Jan 2022 11:41:21 -0500
+Subject: bbg: Inactive windows always accept mouse events
+
+This is to allow mouse hover effects on inactive overlays, such as menus
+
+diff --git a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+index 084b94c8ffa9354bc5c263cea319fa18c6f389c3..8807dcee17bd398da9f76d30bcd0e8e8ae043ed1 100644
+--- a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
++++ b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+@@ -575,10 +575,7 @@ - (void)setCanBeKeyView:(BOOL)can {
+ }
+ 
+ - (BOOL)acceptsMouseEventsWhenInactive {
+-  // Some types of windows (balloons, always-on-top panels) want to accept mouse
+-  // clicks w/o the first click being treated as 'activation'. Same applies to
+-  // mouse move events.
+-  return [[self window] level] > NSNormalWindowLevel;
++  return YES;
+ }
+ 
+ - (BOOL)acceptsFirstMouse:(NSEvent*)theEvent {
