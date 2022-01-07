@@ -123,3 +123,4 @@ cherry-pick-45f9dcf5021d.patch
 mac_get_target_chrome_to_build_with_the_macos_12_0_sdk.patch
 bbg_multi-heap_tracer_gin_changes.patch
 bbg_multi-heap_tracer_blink_changes.patch
+bbg_inactive_windows_always_accept_mouse_events.patch
