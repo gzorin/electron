@@ -1164,6 +1164,17 @@ bool NativeWindowViews::IsFocusable() {
 #endif
 }
 
+void NativeWindowViews::SetFocusableOnMousedown(bool focusableOnMousedown) {
+#if defined(OS_WIN)
+  LONG ex_style = ::GetWindowLong(GetAcceleratedWidget(), GWL_EXSTYLE);
+  if (focusable)
+    ex_style &= ~WS_EX_NOACTIVATE;
+  else
+    ex_style |= WS_EX_NOACTIVATE;
+  ::SetWindowLong(GetAcceleratedWidget(), GWL_EXSTYLE, ex_style);
+#endif
+}
+
 void NativeWindowViews::SetMenu(ElectronMenuModel* menu_model) {
 #if defined(USE_X11)
   if (!features::IsUsingOzonePlatform()) {
