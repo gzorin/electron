@@ -172,6 +172,7 @@ class NativeWindow : public base::SupportsUserData,
   virtual void SetContentProtection(bool enable) = 0;
   virtual void SetFocusable(bool focusable);
   virtual bool IsFocusable();
+  virtual void SetFocusableOnMousedown(bool focusableOnMousedown) = 0;
   virtual void SetMenu(ElectronMenuModel* menu);
   virtual void SetParentWindow(NativeWindow* parent);
   virtual void AddBrowserView(NativeBrowserView* browser_view) = 0;

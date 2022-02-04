@@ -31,11 +31,13 @@ class ScopedDisableResize {
 @interface ElectronNSWindow : NativeWidgetMacNSWindow {
  @private
   electron::NativeWindowMac* shell_;
+  BOOL _hasOpenMouseDown;
 }
 @property BOOL acceptsFirstMouse;
 @property BOOL enableLargerThanScreen;
 @property BOOL disableAutoHideCursor;
 @property BOOL disableKeyOrMainWindow;
+@property BOOL disableKeyOrMainWindowOnMousedown;
 @property(nonatomic, retain) NSVisualEffectView* vibrantView;
 @property(nonatomic, retain) NSImage* cornerMask;
 - (id)initWithShell:(electron::NativeWindowMac*)shell

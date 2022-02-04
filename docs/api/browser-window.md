@@ -1755,6 +1755,12 @@ On macOS it does not remove the focus from the window.
 
 Returns whether the window can be focused.
 
+#### `win.setFocusableOnMousedown(focusableOnMousedown)` _macOS_ _Windows_
+
+* `focusableOnMousedown` Boolean
+
+Changes whether the window can be focused when clicking on it.
+
 #### `win.setParentWindow(parent)`
 
 * `parent` BrowserWindow | null

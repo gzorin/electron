@@ -27,6 +27,7 @@ int ScopedDisableResize::disable_resize_ = 0;
 @synthesize enableLargerThanScreen;
 @synthesize disableAutoHideCursor;
 @synthesize disableKeyOrMainWindow;
+@synthesize disableKeyOrMainWindowOnMousedown;
 @synthesize vibrantView;
 @synthesize cornerMask;
 
@@ -38,6 +39,7 @@ int ScopedDisableResize::disable_resize_ = 0;
                                    defer:NO])) {
     shell_ = shell;
   }
+  _hasOpenMouseDown = NO;
   return self;
 }
 
@@ -148,11 +150,31 @@ int ScopedDisableResize::disable_resize_ = 0;
 }
 
 - (BOOL)canBecomeMainWindow {
+  if (_hasOpenMouseDown) {
+    return !self.disableKeyOrMainWindowOnMousedown;
+  }
+
   return !self.disableKeyOrMainWindow;
 }
 
 - (BOOL)canBecomeKeyWindow {
+  if (_hasOpenMouseDown) {
+    return !self.disableKeyOrMainWindowOnMousedown;
+  }
+
   return !self.disableKeyOrMainWindow;
+}
+
+- (void)sendEvent:(NSEvent*)event {
+  NSEventType type = [event type];
+
+  if (type == NSLeftMouseDown) {
+    _hasOpenMouseDown = YES;
+  } else if (type == NSLeftMouseUp) {
+    _hasOpenMouseDown = NO;
+  }
+
+  [super sendEvent:event];
 }
 
 - (NSView*)frameView {

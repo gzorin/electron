@@ -169,6 +169,7 @@ class BaseWindow : public gin_helper::TrackableObject<BaseWindow>,
   void SetContentProtection(bool enable);
   void SetFocusable(bool focusable);
   bool IsFocusable();
+  void SetFocusableOnMousedown(bool focusableOnMousedown);
   void SetMenu(v8::Isolate* isolate, v8::Local<v8::Value> menu);
   void RemoveMenu();
   void SetParentWindow(v8::Local<v8::Value> value, gin_helper::Arguments* args);
