@@ -125,6 +125,7 @@ class NativeWindowViews : public NativeWindow,
   void SetContentProtection(bool enable) override;
   void SetFocusable(bool focusable) override;
   bool IsFocusable() override;
+  void SetFocusableOnMousedown(bool focusableOnMousedown) override;
   void SetMenu(ElectronMenuModel* menu_model) override;
   void AddBrowserView(NativeBrowserView* browser_view) override;
   void RemoveBrowserView(NativeBrowserView* browser_view) override;
