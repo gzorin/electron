@@ -1167,7 +1167,7 @@ bool NativeWindowViews::IsFocusable() {
 void NativeWindowViews::SetFocusableOnMousedown(bool focusableOnMousedown) {
 #if defined(OS_WIN)
   LONG ex_style = ::GetWindowLong(GetAcceleratedWidget(), GWL_EXSTYLE);
-  if (focusable)
+  if (focusableOnMousedown)
     ex_style &= ~WS_EX_NOACTIVATE;
   else
     ex_style |= WS_EX_NOACTIVATE;
