@@ -369,6 +369,20 @@ void FileChooserDialog::AddFilters(const Filters& filters) {
   }
 }
 
+bool CanPreview(const struct stat& st) {
+  // Only preview regular files; pipes may hang.
+  // See https://crbug.com/534754.
+  if (!S_ISREG(st.st_mode)) {
+    return false;
+  }
+
+  // Don't preview huge files; they may crash.
+  // https://github.com/electron/electron/issues/31630
+  // Setting an arbitrary filesize max t at 100 MB here.
+  constexpr off_t ArbitraryMax = 100000000ULL;
+  return st.st_size < ArbitraryMax;
+}
+
 void FileChooserDialog::OnUpdatePreview(GtkFileChooser* chooser) {
   CHECK(!*supports_gtk_file_chooser_native);
   gchar* filename = gtk_file_chooser_get_preview_filename(chooser);
@@ -377,10 +391,8 @@ void FileChooserDialog::OnUpdatePreview(GtkFileChooser* chooser) {
     return;
   }
 
-  // Don't attempt to open anything which isn't a regular file. If a named
-  // pipe, this may hang. See https://crbug.com/534754.
-  struct stat stat_buf;
-  if (stat(filename, &stat_buf) != 0 || !S_ISREG(stat_buf.st_mode)) {
+  struct stat sb;
+  if (stat(filename, &sb) != 0 || !CanPreview(sb)) {
     g_free(filename);
     gtk_file_chooser_set_preview_widget_active(chooser, FALSE);
     return;
@@ -400,9 +412,8 @@ void FileChooserDialog::OnUpdatePreview(GtkFileChooser* chooser) {
 }  // namespace
 
 void ShowFileDialog(const FileChooserDialog& dialog) {
-  if (*supports_gtk_file_chooser_native) {
-    dl_gtk_native_dialog_show(static_cast<void*>(dialog.dialog()));
-  } else {
+  // gtk_native_dialog_run() will call gtk_native_dialog_show() for us.
+  if (!*supports_gtk_file_chooser_native) {
     gtk_widget_show_all(GTK_WIDGET(dialog.dialog()));
   }
 }

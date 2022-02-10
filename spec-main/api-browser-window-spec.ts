@@ -953,6 +953,17 @@ describe('BrowserWindow module', () => {
         await resize;
         expectBoundsEqual(w.getSize(), size);
       });
+
+      it('doesn\'t change bounds when maximum size is set', () => {
+        w.setMenu(null);
+        w.setMaximumSize(400, 400);
+        // Without https://github.com/electron/electron/pull/29101
+        // following call would shrink the window to 384x361.
+        // There would be also DCHECK in resize_utils.cc on
+        // debug build.
+        w.setAspectRatio(1.0);
+        expectBoundsEqual(w.getSize(), [400, 400]);
+      });
     });
 
     describe('BrowserWindow.setPosition(x, y)', () => {
@@ -3406,6 +3417,29 @@ describe('BrowserWindow module', () => {
       w.unmaximize();
       expectBoundsEqual(w.getPosition(), initialPosition);
     });
+
+    // TODO(dsanders11): Enable once minimize event works on Linux again.
+    //                   See https://github.com/electron/electron/issues/28699
+    ifit(process.platform !== 'linux')('should not restore a minimized window', async () => {
+      const w = new BrowserWindow();
+      const minimize = emittedOnce(w, 'minimize');
+      w.minimize();
+      await minimize;
+      w.unmaximize();
+      await delay(1000);
+      expect(w.isMinimized()).to.be.true();
+    });
+
+    it('should not change the size or position of a normal window', async () => {
+      const w = new BrowserWindow();
+
+      const initialSize = w.getSize();
+      const initialPosition = w.getPosition();
+      w.unmaximize();
+      await delay(1000);
+      expectBoundsEqual(w.getSize(), initialSize);
+      expectBoundsEqual(w.getPosition(), initialPosition);
+    });
   });
 
   describe('setFullScreen(false)', () => {
@@ -4175,8 +4209,6 @@ describe('BrowserWindow module', () => {
         const leaveFullScreen = emittedOnce(w, 'leave-full-screen');
         w.setFullScreen(false);
         await leaveFullScreen;
-
-        w.close();
       });
 
       it('can be changed with setFullScreen method', async () => {
