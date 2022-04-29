@@ -1250,6 +1250,9 @@ bool WebContents::PlatformHandleKeyboardEvent(
 content::KeyboardEventProcessingResult WebContents::PreHandleKeyboardEvent(
     content::WebContents* source,
     const content::NativeWebKeyboardEvent& event) {
+  if (exclusive_access_manager_->HandleUserKeyEvent(event))
+    return content::KeyboardEventProcessingResult::HANDLED;
+
   if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
       event.GetType() == blink::WebInputEvent::Type::kKeyUp) {
     bool prevent_default = Emit("before-input-event", event);
@@ -1339,6 +1342,11 @@ void WebContents::ExitFullscreenModeForTab(content::WebContents* source) {
   if (!owner_window_)
     return;
 
+  // This needs to be called before we exit fullscreen on the native window,
+  // or the controller will incorrectly think we weren't fullscreen and bail.
+  exclusive_access_manager_->fullscreen_controller()->ExitFullscreenModeForTab(
+      source);
+
   SetHtmlApiFullscreen(false);
 
   if (native_fullscreen_) {
@@ -1347,9 +1355,6 @@ void WebContents::ExitFullscreenModeForTab(content::WebContents* source) {
     // `chrome/browser/ui/exclusive_access/fullscreen_controller.cc`.
     source->GetRenderViewHost()->GetWidget()->SynchronizeVisualProperties();
   }
-
-  exclusive_access_manager_->fullscreen_controller()->ExitFullscreenModeForTab(
-      source);
 }
 
 void WebContents::RendererUnresponsive(
@@ -1398,6 +1403,35 @@ void WebContents::FindReply(content::WebContents* web_contents,
   Emit("found-in-page", result.GetHandle());
 }
 
+void WebContents::RequestExclusivePointerAccess(
+    content::WebContents* web_contents,
+    bool user_gesture,
+    bool last_unlocked_by_target,
+    bool allowed) {
+  if (allowed) {
+    exclusive_access_manager_->mouse_lock_controller()->RequestToLockMouse(
+        web_contents, user_gesture, last_unlocked_by_target);
+  } else {
+    web_contents->GotResponseToLockMouseRequest(
+        blink::mojom::PointerLockResult::kPermissionDenied);
+  }
+}
+
+void WebContents::RequestToLockMouse(content::WebContents* web_contents,
+                                     bool user_gesture,
+                                     bool last_unlocked_by_target) {
+  auto* permission_helper =
+      WebContentsPermissionHelper::FromWebContents(web_contents);
+  permission_helper->RequestPointerLockPermission(
+      user_gesture, last_unlocked_by_target,
+      base::BindOnce(&WebContents::RequestExclusivePointerAccess,
+                     base::Unretained(this)));
+}
+
+void WebContents::LostMouseLock() {
+  exclusive_access_manager_->mouse_lock_controller()->LostMouseLock();
+}
+
 void WebContents::RequestKeyboardLock(content::WebContents* web_contents,
                                       bool esc_key_locked) {
   exclusive_access_manager_->keyboard_lock_controller()->RequestKeyboardLock(
@@ -1428,14 +1462,6 @@ void WebContents::RequestMediaAccessPermission(
   auto* permission_helper =
       WebContentsPermissionHelper::FromWebContents(web_contents);
   permission_helper->RequestMediaAccessPermission(request, std::move(callback));
-}
-
-void WebContents::RequestToLockMouse(content::WebContents* web_contents,
-                                     bool user_gesture,
-                                     bool last_unlocked_by_target) {
-  auto* permission_helper =
-      WebContentsPermissionHelper::FromWebContents(web_contents);
-  permission_helper->RequestPointerLockPermission(user_gesture);
 }
 
 content::JavaScriptDialogManager* WebContents::GetJavaScriptDialogManager(
