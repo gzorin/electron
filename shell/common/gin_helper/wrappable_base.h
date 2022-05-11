@@ -31,6 +31,8 @@ namespace gin_helper {
 // wrapper as the signal to delete the wrapped object.
 class WrappableBase {
  public:
+  enum InternalFields { kWrapperType, kSlot, kInternalFieldCount };
+
   WrappableBase();
   WrappableBase(const WrappableBase&) = delete;
   WrappableBase& operator=(const WrappableBase&) = delete;

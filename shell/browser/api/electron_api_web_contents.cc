@@ -2098,7 +2098,7 @@ void WebContents::WebContentsDestroyed() {
   v8::Local<v8::Object> wrapper;
   if (!GetWrapper(isolate).ToLocal(&wrapper))
     return;
-  wrapper->SetAlignedPointerInInternalField(0, nullptr);
+  wrapper->SetAlignedPointerInInternalField(gin_helper::WrappableBase::kSlot, nullptr);
 
   // Tell WebViewGuestDelegate that the WebContents has been destroyed.
   if (guest_delegate_)

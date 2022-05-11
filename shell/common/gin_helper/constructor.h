@@ -161,7 +161,8 @@ v8::Local<v8::Function> CreateConstructor(
 #endif
   v8::Local<v8::FunctionTemplate> templ = gin_helper::CreateFunctionTemplate(
       isolate, base::BindRepeating(&internal::InvokeNew<Sig>, func));
-  templ->InstanceTemplate()->SetInternalFieldCount(1);
+  templ->InstanceTemplate()->SetInternalFieldCount(
+      gin_helper::WrappableBase::kInternalFieldCount);
   T::BuildPrototype(isolate, templ);
   return templ->GetFunction(isolate->GetCurrentContext()).ToLocalChecked();
 }
