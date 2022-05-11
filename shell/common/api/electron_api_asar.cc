@@ -21,7 +21,8 @@ class Archive : public node::ObjectWrap {
     auto tpl = v8::FunctionTemplate::New(isolate, Archive::New);
     tpl->SetClassName(
         v8::String::NewFromUtf8(isolate, "Archive").ToLocalChecked());
-    tpl->InstanceTemplate()->SetInternalFieldCount(1);
+    tpl->InstanceTemplate()->SetInternalFieldCount(
+        node::ObjectWrap::kInternalFieldCount);
 
     NODE_SET_PROTOTYPE_METHOD(tpl, "getFileInfo", &Archive::GetFileInfo);
     NODE_SET_PROTOTYPE_METHOD(tpl, "stat", &Archive::Stat);
