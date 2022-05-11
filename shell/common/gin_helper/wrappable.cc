@@ -10,6 +10,10 @@
 
 namespace gin_helper {
 
+namespace {
+static uint16_t kElectronEmbedderId = 0xE1ec;
+}
+
 WrappableBase::WrappableBase() = default;
 
 WrappableBase::~WrappableBase() {
@@ -17,7 +21,7 @@ WrappableBase::~WrappableBase() {
     return;
 
   v8::HandleScope scope(isolate());
-  GetWrapper()->SetAlignedPointerInInternalField(0, nullptr);
+  GetWrapper()->SetAlignedPointerInInternalField(kSlot, nullptr);
   wrapper_.ClearWeak();
   wrapper_.Reset();
 }
@@ -48,7 +52,8 @@ void WrappableBase::InitWith(v8::Isolate* isolate,
                              v8::Local<v8::Object> wrapper) {
   CHECK(wrapper_.IsEmpty());
   isolate_ = isolate;
-  wrapper->SetAlignedPointerInInternalField(0, this);
+  wrapper->SetAlignedPointerInInternalField(kWrapperType, &kElectronEmbedderId);
+  wrapper->SetAlignedPointerInInternalField(kSlot, this);
   wrapper_.Reset(isolate, wrapper);
   wrapper_.SetWeak(this, FirstWeakCallback,
                    v8::WeakCallbackType::kInternalFields);
@@ -64,7 +69,7 @@ void WrappableBase::InitWith(v8::Isolate* isolate,
 // static
 void WrappableBase::FirstWeakCallback(
     const v8::WeakCallbackInfo<WrappableBase>& data) {
-  auto* wrappable = static_cast<WrappableBase*>(data.GetInternalField(0));
+  auto* wrappable = static_cast<WrappableBase*>(data.GetInternalField(kSlot));
   if (wrappable) {
     wrappable->wrapper_.Reset();
     data.SetSecondPassCallback(SecondWeakCallback);
@@ -74,7 +79,7 @@ void WrappableBase::FirstWeakCallback(
 // static
 void WrappableBase::SecondWeakCallback(
     const v8::WeakCallbackInfo<WrappableBase>& data) {
-  delete static_cast<WrappableBase*>(data.GetInternalField(0));
+  delete static_cast<WrappableBase*>(data.GetInternalField(kSlot));
 }
 
 namespace internal {
@@ -83,9 +88,10 @@ void* FromV8Impl(v8::Isolate* isolate, v8::Local<v8::Value> val) {
   if (!val->IsObject())
     return nullptr;
   v8::Local<v8::Object> obj = val.As<v8::Object>();
-  if (obj->InternalFieldCount() != 1)
+  if (obj->InternalFieldCount() != WrappableBase::kInternalFieldCount ||
+        &kElectronEmbedderId != obj->GetAlignedPointerFromInternalField(WrappableBase::kWrapperType))
     return nullptr;
-  return obj->GetAlignedPointerFromInternalField(0);
+  return obj->GetAlignedPointerFromInternalField(WrappableBase::kSlot);
 }
 
 }  // namespace internal

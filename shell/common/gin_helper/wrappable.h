@@ -27,7 +27,7 @@ class Wrappable : public WrappableBase {
                              const base::RepeatingCallback<Sig>& constructor) {
     v8::Local<v8::FunctionTemplate> templ = gin_helper::CreateFunctionTemplate(
         isolate, base::BindRepeating(&internal::InvokeNew<Sig>, constructor));
-    templ->InstanceTemplate()->SetInternalFieldCount(1);
+    templ->InstanceTemplate()->SetInternalFieldCount(kInternalFieldCount);
     T::BuildPrototype(isolate, templ);
     gin::PerIsolateData::From(isolate)->SetFunctionTemplate(&kWrapperInfo,
                                                             templ);
@@ -39,7 +39,7 @@ class Wrappable : public WrappableBase {
     auto templ = data->GetFunctionTemplate(&kWrapperInfo);
     if (templ.IsEmpty()) {
       templ = v8::FunctionTemplate::New(isolate);
-      templ->InstanceTemplate()->SetInternalFieldCount(1);
+      templ->InstanceTemplate()->SetInternalFieldCount(kInternalFieldCount);
       T::BuildPrototype(isolate, templ);
       data->SetFunctionTemplate(&kWrapperInfo, templ);
     }

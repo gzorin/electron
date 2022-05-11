@@ -61,7 +61,7 @@ class TrackableObject : public TrackableObjectBase, public EventEmitter<T> {
     v8::HandleScope scope(gin_helper::Wrappable<T>::isolate());
     v8::Local<v8::Object> wrapper = gin_helper::Wrappable<T>::GetWrapper();
     if (!wrapper.IsEmpty()) {
-      wrapper->SetAlignedPointerInInternalField(0, nullptr);
+      wrapper->SetAlignedPointerInInternalField(gin_helper::WrappableBase::kSlot, nullptr);
       gin_helper::WrappableBase::wrapper_.ClearWeak();
     }
   }
@@ -69,8 +69,8 @@ class TrackableObject : public TrackableObjectBase, public EventEmitter<T> {
   bool IsDestroyed() {
     v8::HandleScope scope(gin_helper::Wrappable<T>::isolate());
     v8::Local<v8::Object> wrapper = gin_helper::Wrappable<T>::GetWrapper();
-    return wrapper->InternalFieldCount() == 0 ||
-           wrapper->GetAlignedPointerFromInternalField(0) == nullptr;
+    return wrapper->InternalFieldCount() <= gin_helper::WrappableBase::kSlot ||
+           wrapper->GetAlignedPointerFromInternalField(gin_helper::WrappableBase::kSlot) == nullptr;
   }
 
   // Finds out the TrackableObject from its ID in weak map.
