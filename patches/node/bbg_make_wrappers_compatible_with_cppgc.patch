@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Wed, 18 May 2022 16:26:26 -0400
+Subject: bbg: Make wrappers compatible with `cppgc`
+
+This will allow Node to work properly in a `v8::Isolate` that also has
+a `v8::CppHeap` attached to it.
+
+diff --git a/src/node_contextify.cc b/src/node_contextify.cc
+index 482c9a7b51dbf03f8a591c8560084b6a4030f62d..befdadc2b8124e89c57603114ee9bb2f970428e0 100644
+--- a/src/node_contextify.cc
++++ b/src/node_contextify.cc
+@@ -100,6 +100,13 @@ using v8::WeakCallbackType;
+ 
+ namespace {
+ 
++// This just has to be different from the Chromium ones:
++// https://source.chromium.org/chromium/chromium/src/+/main:gin/public/gin_embedders.h;l=18-23;drc=5a758a97032f0b656c3c36a3497560762495501a
++// Otherwise, when Node is loaded in an isolate which uses cppgc, cppgc will
++// misinterpret the data stored in the embedder fields and try to garbage
++// collect them.
++static uint16_t kNodeEmbedderId = 0x90de;
++
+ // Convert an int to a V8 Name (String or Symbol).
+ Local<Name> Uint32ToName(Local<Context> context, uint32_t index) {
+   return Uint32::New(context->GetIsolate(), index)->ToString(context)
+@@ -155,6 +162,8 @@ MaybeLocal<Object> ContextifyContext::CreateDataWrapper(Environment* env) {
+     return MaybeLocal<Object>();
+   }
+ 
++  wrapper->SetAlignedPointerInInternalField(ContextifyContext::kWrapperType,
++    &kNodeEmbedderId);
+   wrapper->SetAlignedPointerInInternalField(ContextifyContext::kSlot, this);
+   return wrapper;
+ }
+diff --git a/src/node_contextify.h b/src/node_contextify.h
+index c9ba78b8a5e185f3e053c5a717d9102df64657b2..752b25fae730c6e880ed4a8eb55df6ad06d63607 100644
+--- a/src/node_contextify.h
++++ b/src/node_contextify.h
+@@ -43,7 +43,7 @@ struct ContextOptions {
+ 
+ class ContextifyContext {
+  public:
+-  enum InternalFields { kSlot, kInternalFieldCount };
++  enum InternalFields { kWrapperType, kSlot, kInternalFieldCount };
+   ContextifyContext(Environment* env,
+                     v8::Local<v8::Object> sandbox_obj,
+                     const ContextOptions& options);
+diff --git a/src/node_object_wrap.h b/src/node_object_wrap.h
+index cb13d84388bcc6806d3b038a51e1cc2d1feccda1..58a6071bd6739d6039292be7128d200cac8342ec 100644
+--- a/src/node_object_wrap.h
++++ b/src/node_object_wrap.h
+@@ -28,8 +28,14 @@
+ 
+ namespace node {
+ 
++namespace {
++static uint16_t kNodeEmbedderId2 = 0x90de;
++}
++
+ class ObjectWrap {
+  public:
++  enum InternalFields { kWrapperType, kSlot, kInternalFieldCount };
++
+   ObjectWrap() {
+     refs_ = 0;
+   }
+@@ -46,10 +52,10 @@ class ObjectWrap {
+   template <class T>
+   static inline T* Unwrap(v8::Local<v8::Object> handle) {
+     assert(!handle.IsEmpty());
+-    assert(handle->InternalFieldCount() > 0);
++    assert(handle->InternalFieldCount() >= kInternalFieldCount);
+     // Cast to ObjectWrap before casting to T.  A direct cast from void
+     // to T won't work right when T has more than one base class.
+-    void* ptr = handle->GetAlignedPointerFromInternalField(0);
++    void* ptr = handle->GetAlignedPointerFromInternalField(kSlot);
+     ObjectWrap* wrap = static_cast<ObjectWrap*>(ptr);
+     return static_cast<T*>(wrap);
+   }
+@@ -74,8 +80,9 @@ class ObjectWrap {
+  protected:
+   inline void Wrap(v8::Local<v8::Object> handle) {
+     assert(persistent().IsEmpty());
+-    assert(handle->InternalFieldCount() > 0);
+-    handle->SetAlignedPointerInInternalField(0, this);
++    assert(handle->InternalFieldCount() >= kInternalFieldCount);
++    handle->SetAlignedPointerInInternalField(kWrapperType, &kNodeEmbedderId2);
++    handle->SetAlignedPointerInInternalField(kSlot, this);
+     persistent().Reset(v8::Isolate::GetCurrent(), handle);
+     MakeWeak();
+   }
