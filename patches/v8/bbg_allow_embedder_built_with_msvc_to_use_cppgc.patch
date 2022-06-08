@@ -1,0 +1,377 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Betts <alex.betts@gmail.com>
+Date: Wed, 8 Jun 2022 09:12:03 -0400
+Subject: bbg: Allow embedder built with MSVC to use cppgc
+
+The following issues arise when an embedder compiled with MSVC attempts
+to use V8's 'cppgc' garbage collection library:
+
+* The public interface of 'cppgc' includes some functions that accept
+  `std::atomic`s as arguments. clang's standard library encloses
+  classes like `std::atomic` in an additional versioned namespace
+  (e.g., `std::__1::atomic`) but MSVC's standard library does not, so
+  functions that take `std::atomics` as input will have their mangled
+  names exported in a way that isn't compatible with MSVC, resulting in
+  linker errors when building the embedder.
+
+* 'cppgc' includes a utility called `cppgc::SourceLocation`, which is
+  an implementation of C++20's `std::source_location`. This class uses
+  built-in functions like `__builtin_FUNCTION()`, testing for their
+  availability depending on the compiler being used. Such functions are
+  available in MSVC, but weren't being tested for correctly, producing
+  an imported symbol that wasn't being exported by blpwtk2
+  (the clang-generated blpwtk2 exported
+  `cppgc::SourceLocation::Current(const char *, const char *, size_t)`,
+  but the incorrect test caused MSVC to expect
+  `cppgc::SourceLocation::Current()`.
+
+* The public function `v8::CppHeap::Create` uses the standard library
+  types `std::vector` and `std::unique_ptr` for one of its arguments,
+  which can't be used by an embedder built with a different standard
+  library
+
+This patch resolves these issues as follows:
+
+* Replaces use of `std::atomic<GCInfoIndex>` in 'cppgc's public API, in
+  'gc-info.h', with a new public class, `cppgc::AtomicGCInfoIndex`.
+  This class wraps a `std::atomic<GCInfoIndex>` object as a private
+  member, but only refers to that object's member functions in the
+  definition of `AtomicGCInfoIndex`, in 'gc-info.cc'. The name
+  `std::atomic` will not leak across the library boundary.
+
+* `__builtin_FUNCTION()` and such *are* available in MSVC 16.6 and
+  later (and even though V8's test for them fails), so
+  'source_location.h' simply tests for this version of the compiler to
+  set the availability of these built-in functions.
+
+* Adds a new version of the `Create()` function to `v8::CppHeap` which
+  doesn't accept the `std::vector`, since our embedding use cases don't
+  make use of it anyway. A `Destroy()` function is added as well, to
+  avoid issues with the embedder's own implementation of the `delete`
+  operator
+
+diff --git a/include/cppgc/internal/gc-info.h b/include/cppgc/internal/gc-info.h
+index e8f90fed57109fe48793a1c5e5b5e14870da43ec..1282d58eb4c8c5f675df1402a48a3d6ae7eff191 100644
+--- a/include/cppgc/internal/gc-info.h
++++ b/include/cppgc/internal/gc-info.h
+@@ -14,17 +14,50 @@
+ #include "cppgc/trace-trait.h"
+ #include "v8config.h"  // NOLINT(build/include_directory)
+ 
++#if defined(__has_attribute)
++#if __has_attribute(no_destroy)
++#define CPPGC_NO_DESTROY [[clang::no_destroy]]
++#endif
++#endif
++
++#ifndef CPPGC_NO_DESTROY
++#define CPPGC_NO_DESTROY
++#endif
++
+ namespace cppgc {
+ namespace internal {
+ 
+ using GCInfoIndex = uint16_t;
+ 
++struct V8_EXPORT AtomicGCInfoIndex final {
++
++  AtomicGCInfoIndex();
++  ~AtomicGCInfoIndex();
++
++  AtomicGCInfoIndex(const AtomicGCInfoIndex&) = delete;
++
++  AtomicGCInfoIndex& operator=(const AtomicGCInfoIndex&) = delete;
++
++  GCInfoIndex load_acquire() const noexcept;
++  GCInfoIndex load_acquire() const volatile noexcept;
++
++  GCInfoIndex load_relaxed() const noexcept;
++  GCInfoIndex load_relaxed() const volatile noexcept;
++
++  void store_release(GCInfoIndex desired) noexcept;
++  void store_release(GCInfoIndex desired) volatile noexcept;
++
++ private:
++
++  std::atomic<GCInfoIndex> *detail_;
++};
++
+ struct V8_EXPORT EnsureGCInfoIndexTrait final {
+   // Acquires a new GC info object and returns the index. In addition, also
+   // updates `registered_index` atomically.
+   template <typename T>
+   V8_INLINE static GCInfoIndex EnsureIndex(
+-      std::atomic<GCInfoIndex>& registered_index) {
++      AtomicGCInfoIndex& registered_index) {
+     return EnsureGCInfoIndexTraitDispatch<T>{}(registered_index);
+   }
+ 
+@@ -34,28 +67,28 @@ struct V8_EXPORT EnsureGCInfoIndexTrait final {
+             bool = NameTrait<T>::HasNonHiddenName()>
+   struct EnsureGCInfoIndexTraitDispatch;
+ 
+-  static GCInfoIndex EnsureGCInfoIndexPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexPolymorphic(AtomicGCInfoIndex&,
+                                                   TraceCallback,
+                                                   FinalizationCallback,
+                                                   NameCallback);
+-  static GCInfoIndex EnsureGCInfoIndexPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexPolymorphic(AtomicGCInfoIndex&,
+                                                   TraceCallback,
+                                                   FinalizationCallback);
+-  static GCInfoIndex EnsureGCInfoIndexPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexPolymorphic(AtomicGCInfoIndex&,
+                                                   TraceCallback, NameCallback);
+-  static GCInfoIndex EnsureGCInfoIndexPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexPolymorphic(AtomicGCInfoIndex&,
+                                                   TraceCallback);
+-  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(AtomicGCInfoIndex&,
+                                                      TraceCallback,
+                                                      FinalizationCallback,
+                                                      NameCallback);
+-  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(AtomicGCInfoIndex&,
+                                                      TraceCallback,
+                                                      FinalizationCallback);
+-  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(AtomicGCInfoIndex&,
+                                                      TraceCallback,
+                                                      NameCallback);
+-  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(std::atomic<GCInfoIndex>&,
++  static GCInfoIndex EnsureGCInfoIndexNonPolymorphic(AtomicGCInfoIndex&,
+                                                      TraceCallback);
+ };
+ 
+@@ -64,7 +97,7 @@ struct V8_EXPORT EnsureGCInfoIndexTrait final {
+   struct EnsureGCInfoIndexTrait::EnsureGCInfoIndexTraitDispatch<               \
+       T, is_polymorphic, has_finalizer, has_non_hidden_name> {                 \
+     V8_INLINE GCInfoIndex                                                      \
+-    operator()(std::atomic<GCInfoIndex>& registered_index) {                   \
++    operator()(AtomicGCInfoIndex& registered_index) {                   \
+       return function;                                                         \
+     }                                                                          \
+   };
+@@ -141,9 +174,9 @@ template <typename T>
+ struct GCInfoTrait final {
+   V8_INLINE static GCInfoIndex Index() {
+     static_assert(sizeof(T), "T must be fully defined");
+-    static std::atomic<GCInfoIndex>
++    CPPGC_NO_DESTROY static AtomicGCInfoIndex
+         registered_index;  // Uses zero initialization.
+-    const GCInfoIndex index = registered_index.load(std::memory_order_acquire);
++    const GCInfoIndex index = registered_index.load_acquire();
+     return index ? index
+                  : EnsureGCInfoIndexTrait::EnsureIndex<T>(registered_index);
+   }
+diff --git a/include/cppgc/source-location.h b/include/cppgc/source-location.h
+index da5a5ede52013850e5bb27cc99b676cc1a41c495..7084302521dd441cdaa2d5318738e2b26d012cdc 100644
+--- a/include/cppgc/source-location.h
++++ b/include/cppgc/source-location.h
+@@ -18,6 +18,8 @@
+ #define CPPGC_SUPPORTS_SOURCE_LOCATION 1
+ #elif defined(V8_CC_INTEL) && __ICC >= 1800
+ #define CPPGC_SUPPORTS_SOURCE_LOCATION 1
++#elif defined(V8_CC_MSVC) && _MSC_VER >= 1926
++#define CPPGC_SUPPORTS_SOURCE_LOCATION 1
+ #else
+ #define CPPGC_SUPPORTS_SOURCE_LOCATION 0
+ #endif
+diff --git a/include/v8-cppgc.h b/include/v8-cppgc.h
+index d91253f16ee9775986d699ebfed77b7389c71a13..23b0f8b479d3675d0ecc0d884c4848b702b731f9 100644
+--- a/include/v8-cppgc.h
++++ b/include/v8-cppgc.h
+@@ -108,6 +108,10 @@ class V8_EXPORT CppHeap {
+   static std::unique_ptr<CppHeap> Create(v8::Platform* platform,
+                                          const CppHeapCreateParams& params);
+ 
++  static CppHeap *Create(v8::Platform* platform,
++                         const WrapperDescriptor& wrapper_descriptor);
++  static void Destroy(CppHeap *cpp_heap);
++
+   virtual ~CppHeap() = default;
+ 
+   /**
+diff --git a/src/heap/cppgc-js/cpp-heap.cc b/src/heap/cppgc-js/cpp-heap.cc
+index 28beb83e2760edb0eda45d96c1321a6a4ffd3f1b..2998961bed61c1cb3c7d312a7d3a8714ad40359e 100644
+--- a/src/heap/cppgc-js/cpp-heap.cc
++++ b/src/heap/cppgc-js/cpp-heap.cc
+@@ -167,6 +167,19 @@ std::unique_ptr<CppHeap> CppHeap::Create(v8::Platform* platform,
+       params.marking_support, params.sweeping_support);
+ }
+ 
++v8::CppHeap *CppHeap::Create(v8::Platform* platform,
++                             const v8::WrapperDescriptor& wrapper_descriptor) {
++  std::unique_ptr<CppHeap> cpp_heap = Create(
++      platform,
++      { {}, wrapper_descriptor });
++
++  return cpp_heap.release();
++}
++
++void CppHeap::Destroy(CppHeap* cpp_heap) {
++  delete cpp_heap;
++}
++
+ cppgc::AllocationHandle& CppHeap::GetAllocationHandle() {
+   return internal::CppHeap::From(this)->object_allocator();
+ }
+diff --git a/src/heap/cppgc/gc-info-table.cc b/src/heap/cppgc/gc-info-table.cc
+index 1c86fbb342e5e6e4a6933483ac1372b0f6735d16..0276caf1b36eea10a4fff43938741e937fc2ce60 100644
+--- a/src/heap/cppgc/gc-info-table.cc
++++ b/src/heap/cppgc/gc-info-table.cc
+@@ -125,14 +125,14 @@ void GCInfoTable::CheckMemoryIsZeroed(uintptr_t* base, size_t len) {
+ }
+ 
+ GCInfoIndex GCInfoTable::RegisterNewGCInfo(
+-    std::atomic<GCInfoIndex>& registered_index, const GCInfo& info) {
++    AtomicGCInfoIndex& registered_index, const GCInfo& info) {
+   // Ensuring a new index involves current index adjustment as well as
+   // potentially resizing the table. For simplicity we use a lock.
+   v8::base::MutexGuard guard(&table_mutex_);
+ 
+   // Check the registered index again after taking the lock as some other
+   // thread may have registered the info at the same time.
+-  GCInfoIndex index = registered_index.load(std::memory_order_relaxed);
++  GCInfoIndex index = registered_index.load_relaxed();
+   if (index) {
+     return index;
+   }
+@@ -144,7 +144,7 @@ GCInfoIndex GCInfoTable::RegisterNewGCInfo(
+   GCInfoIndex new_index = current_index_++;
+   CHECK_LT(new_index, GCInfoTable::kMaxIndex);
+   table_[new_index] = info;
+-  registered_index.store(new_index, std::memory_order_release);
++  registered_index.store_release(new_index);
+   return new_index;
+ }
+ 
+diff --git a/src/heap/cppgc/gc-info-table.h b/src/heap/cppgc/gc-info-table.h
+index a4911d78b1206b3568d51bb693e60e5abb0bde13..0623983ba346fd59320532e3b64ffd83ce62e8a1 100644
+--- a/src/heap/cppgc/gc-info-table.h
++++ b/src/heap/cppgc/gc-info-table.h
+@@ -56,7 +56,7 @@ class V8_EXPORT GCInfoTable final {
+   GCInfoTable(const GCInfoTable&) = delete;
+   GCInfoTable& operator=(const GCInfoTable&) = delete;
+ 
+-  GCInfoIndex RegisterNewGCInfo(std::atomic<uint16_t>&, const GCInfo& info);
++  GCInfoIndex RegisterNewGCInfo(AtomicGCInfoIndex&, const GCInfo& info);
+ 
+   const GCInfo& GCInfoFromIndex(GCInfoIndex index) const {
+     DCHECK_GE(index, kMinIndex);
+diff --git a/src/heap/cppgc/gc-info.cc b/src/heap/cppgc/gc-info.cc
+index ddb294cb5cdaf90cffcb0661a073e21645cbe725..b5b266c8e52f090b1da78b78db7ec4225569ddfd 100644
+--- a/src/heap/cppgc/gc-info.cc
++++ b/src/heap/cppgc/gc-info.cc
+@@ -21,7 +21,7 @@ HeapObjectName GetHiddenName(const void*, HeapObjectNameForUnnamedObject) {
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     FinalizationCallback finalization_callback, NameCallback name_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index,
+@@ -30,7 +30,7 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     FinalizationCallback finalization_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index,
+@@ -39,7 +39,7 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     NameCallback name_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index, {nullptr, trace_callback, name_callback, true});
+@@ -47,14 +47,14 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback) {
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index, {nullptr, trace_callback, GetHiddenName, true});
+ }
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     FinalizationCallback finalization_callback, NameCallback name_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index,
+@@ -63,7 +63,7 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     FinalizationCallback finalization_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index,
+@@ -72,7 +72,7 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback,
+     NameCallback name_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index, {nullptr, trace_callback, name_callback, false});
+@@ -80,10 +80,48 @@ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+ 
+ // static
+ GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndexNonPolymorphic(
+-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback) {
++    AtomicGCInfoIndex& registered_index, TraceCallback trace_callback) {
+   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
+       registered_index, {nullptr, trace_callback, GetHiddenName, false});
+ }
+ 
++AtomicGCInfoIndex::AtomicGCInfoIndex()
++: detail_(new std::atomic<GCInfoIndex>()) {
++}
++
++AtomicGCInfoIndex::~AtomicGCInfoIndex() {
++  delete detail_;
++}
++
++GCInfoIndex
++AtomicGCInfoIndex::load_acquire() const noexcept {
++  return detail_->load(std::memory_order_acquire);
++}
++
++GCInfoIndex
++AtomicGCInfoIndex::load_acquire() const volatile noexcept {
++  return detail_->load(std::memory_order_acquire);
++}
++
++GCInfoIndex
++AtomicGCInfoIndex::load_relaxed() const noexcept {
++  return detail_->load(std::memory_order_relaxed);
++}
++
++GCInfoIndex
++AtomicGCInfoIndex::load_relaxed() const volatile noexcept {
++  return detail_->load(std::memory_order_relaxed);
++}
++
++void
++AtomicGCInfoIndex::store_release(GCInfoIndex desired) noexcept {
++  detail_->store(desired, std::memory_order_release);
++}
++
++void
++AtomicGCInfoIndex::store_release(GCInfoIndex desired) volatile noexcept {
++  detail_->store(desired, std::memory_order_release);
++}
++
+ }  // namespace internal
+ }  // namespace cppgc
